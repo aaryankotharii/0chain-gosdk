@@ -429,8 +429,8 @@ func StakePoolLock(blobberID string, value, fee int64) (poolID string, err error
 }
 
 // StakePoolUnlockUnstake is stake pool unlock response in case where tokens
-// can't be unlocked due to opened offers. In this case it false.
-// The real time to unstake depends on when the allocation is closed or finalised.
+// can't be unlocked due to opened offers. In this case it false, you need to
+// wait until the allocation is closed or more tokens are locked.
 type StakePoolUnlockUnstake struct {
 	Unstake bool `json:"unstake"`
 }
