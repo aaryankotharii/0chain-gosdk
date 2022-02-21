@@ -6,10 +6,9 @@ package main
 import (
 	"errors"
 	"fmt"
-
 	"github.com/0chain/gosdk/core/common"
 	"github.com/0chain/gosdk/core/version"
-	"github.com/0chain/gosdk/core/zcncrypto"
+	"github.com/0chain/gosdk/core/zcncrypto/blsmiracle"
 	"github.com/0chain/gosdk/wasmsdk/jsbridge"
 	"github.com/0chain/gosdk/zboxcore/client"
 	"github.com/0chain/gosdk/zboxcore/sdk"
@@ -45,7 +44,7 @@ func main() {
 				}
 
 				//update sign with js sign
-				zcncrypto.Sign = signer
+				blsmiracle.Sign = signer
 				client.Sign = signer
 			} else {
 				PrintError("__zcn_wasm__.jsProxy.sign is not installed yet")

@@ -86,6 +86,7 @@ func TestKeyGeneration(t *testing.T) {
 	Core_Sign(SIG[:], []byte(mess), S[:])
 	res = Core_Verify(SIG[:], []byte(mess), W[:])
 	assert.Equal(t, res, 0, "Signature is *NOT* OK\n")
+
 }
 
 func TestMainHerumi(t *testing.T) {
