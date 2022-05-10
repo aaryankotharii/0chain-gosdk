@@ -62,38 +62,38 @@ func (req *DownloadRequest) downloadBlock(blockNum int64, blockChunksMax int) ([
 	req.wg = &sync.WaitGroup{}
 	req.wg.Add(numDownloads)
 	rspCh := make(chan *downloadBlock, numDownloads)
-	// Download from only specific blobbers
+
 	var c, pos int
 	for i := req.downloadMask; !i.Equals64(0); i = i.And(zboxutil.NewUint128(1).Lsh(uint64(pos)).Not()) {
 		pos = i.TrailingZeros()
-		blockDownloadReq := &BlockDownloadRequest{}
-		blockDownloadReq.allocationID = req.allocationID
-		blockDownloadReq.allocationTx = req.allocationTx
-		blockDownloadReq.allocOwnerID = req.allocOwnerID
-		blockDownloadReq.authTicket = req.authTicket
-		blockDownloadReq.blobber = req.blobbers[pos]
-		blockDownloadReq.blobberIdx = pos
-		blockDownloadReq.chunkSize = req.chunkSize
-		blockDownloadReq.blockNum = blockNum
-		blockDownloadReq.contentMode = req.contentMode
-		blockDownloadReq.result = rspCh
-		blockDownloadReq.wg = req.wg
-		blockDownloadReq.ctx = req.ctx
-		blockDownloadReq.remotefilepath = req.remotefilepath
-		blockDownloadReq.remotefilepathhash = req.remotefilepathhash
-		blockDownloadReq.numBlocks = req.numBlocks
-		blockDownloadReq.rxPay = req.rxPay
-		blockDownloadReq.encryptedKey = req.encryptedKey
+		blockDownloadReq := &BlockDownloadRequest{
+			allocationID:       req.allocationID,
+			allocationTx:       req.allocationTx,
+			allocOwnerID:       req.allocOwnerID,
+			authTicket:         req.authTicket,
+			blobber:            req.blobbers[pos],
+			blobberIdx:         pos,
+			chunkSize:          req.chunkSize,
+			blockNum:           blockNum,
+			contentMode:        req.contentMode,
+			result:             rspCh,
+			wg:                 req.wg,
+			ctx:                req.ctx,
+			remotefilepath:     req.remotefilepath,
+			remotefilepathhash: req.remotefilepathhash,
+			numBlocks:          req.numBlocks,
+			rxPay:              req.rxPay,
+			encryptedKey:       req.encryptedKey,
+		}
 		go AddBlockDownloadReq(blockDownloadReq)
-		//go obj.downloadBlobberBlock(&obj.blobbers[pos], pos, path, blockNum, rspCh, isPathHash, authTicket)
 		c++
 	}
-	//req.wg.Wait()
+
 	shards := make([][][]byte, req.numBlocks)
 	for i := int64(0); i < req.numBlocks; i++ {
 		shards[i] = make([][]byte, len(req.blobbers))
 	}
-	//shards := make([][]byte, len(req.blobbers))
+
 	decodeLen := make([]int, req.numBlocks)
 	var decodeNumBlocks int
 
@@ -115,79 +115,49 @@ func (req *DownloadRequest) downloadBlock(blockNum int64, blockChunksMax int) ([
 		if !result.Success {
 			logger.Logger.Error("Download block : ", req.blobbers[result.idx].Baseurl, " ", result.err)
 			return nil, result.err
-		} else {
-			blockSuccess := false
-			if blockChunksMax < len(result.BlockChunks) {
-				downloadChunks = blockChunksMax
-			}
+		}
 
-			for blockNum := 0; blockNum < downloadChunks; blockNum++ {
-				if len(req.encryptedKey) > 0 {
+		blockSuccess := false
+		if blockChunksMax < len(result.BlockChunks) {
+			downloadChunks = blockChunksMax
+		}
 
-					// dirty, but can't see other way right now
-					if req.authTicket == nil {
-						headerBytes := result.BlockChunks[blockNum][:EncryptionHeaderSize]
-						headerBytes = bytes.Trim(headerBytes, "\x00")
-
-						if len(headerBytes) != EncryptionHeaderSize {
-							logger.Logger.Error("Block has invalid header", req.blobbers[result.idx].Baseurl)
-							continue
-						}
-
-						encMsg := &encryption.EncryptedMessage{}
-						encMsg.EncryptedData = result.BlockChunks[blockNum][EncryptionHeaderSize:]
-
-						if len(headerBytes) != EncryptionHeaderSize {
-							logger.Logger.Error("Block has invalid header", req.blobbers[result.idx].Baseurl)
-							continue
-						}
-						encMsg.MessageChecksum, encMsg.OverallChecksum = string(headerBytes[:128]), string(headerBytes[128:])
-						encMsg.EncryptedKey = encscheme.GetEncryptedKey()
-						decryptedBytes, err := encscheme.Decrypt(encMsg)
-						if err != nil {
-							logger.Logger.Error("Block decryption failed", req.blobbers[result.idx].Baseurl, err)
-							continue
-						}
-						shards[blockNum][result.idx] = decryptedBytes
-					} else {
-						suite := edwards25519.NewBlakeSHA256Ed25519()
-						reEncMessage := &encryption.ReEncryptedMessage{
-							D1: suite.Point(),
-							D4: suite.Point(),
-							D5: suite.Point(),
-						}
-						err := reEncMessage.Unmarshal(result.BlockChunks[blockNum])
-						if err != nil {
-							logger.Logger.Error("ReEncrypted Block unmarshall failed", req.blobbers[result.idx].Baseurl, err)
-							break
-						}
-						decrypted, err := encscheme.ReDecrypt(reEncMessage)
-						if err != nil {
-							logger.Logger.Error("Block redecryption failed", req.blobbers[result.idx].Baseurl, err)
-							break
-						}
-						shards[blockNum][result.idx] = decrypted
-					}
+		for blockNum := 0; blockNum < downloadChunks; blockNum++ {
+			var data []byte
+			var err error
+			if len(req.encryptedKey) > 0 {
+				if req.authTicket == nil {
+					data, err = decryptForOwner(result, encscheme, blockNum)
 				} else {
-					shards[blockNum][result.idx] = result.BlockChunks[blockNum]
+					data, err = decryptForAuthTicket(result, encscheme, blockNum)
 				}
 
-				// All share should have equal length
-				decodeLen[blockNum] = len(shards[blockNum][result.idx])
-				blockSuccess = true
+				if err != nil {
+					logger.Logger.Error(err)
+					break
+				}
+			} else {
+				data = result.BlockChunks[blockNum]
 			}
 
-			if !blockSuccess {
-				continue
-			}
+			shards[blockNum][result.idx] = data
 
-			success++
-			if success >= req.datashards {
-				decodeNumBlocks = downloadChunks
-				break
-			}
+			// All share should have equal length
+			decodeLen[blockNum] = len(shards[blockNum][result.idx])
+			blockSuccess = true
+		}
+
+		if !blockSuccess {
+			continue
+		}
+
+		success++
+		if success >= req.datashards {
+			decodeNumBlocks = downloadChunks
+			break
 		}
 	}
+
 	erasureencoder, err := encoder.NewEncoder(req.datashards, req.parityshards)
 	if err != nil {
 		return nil, errors.Wrap(err, "encoder init error")
@@ -221,23 +191,17 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 		allocationTx:       req.allocationTx,
 		blobbers:           req.blobbers,
 		ctx:                req.ctx,
+		authToken:          req.authTicket,
+		Consensus: Consensus{
+			fullconsensus:          req.fullconsensus,
+			consensusThresh:        req.consensusThresh,
+			consensusRequiredForOk: req.consensusRequiredForOk,
+		},
 	}
-	listReq.authToken = req.authTicket
-	listReq.fullconsensus = req.fullconsensus
-	listReq.consensusThresh = req.consensusThresh
-	listReq.consensusRequiredForOk = req.consensusRequiredForOk
 	req.downloadMask, fileRef, _ = listReq.getFileConsensusFromBlobbers()
 	if req.downloadMask.Equals64(0) || fileRef == nil {
 		if req.statusCallback != nil {
 			req.statusCallback.Error(req.allocationID, remotePathCallback, OpDownload, errors.New("", "No minimum consensus for file meta data of file"))
-		}
-		return
-	}
-
-	// the ChunkSize value can't be less than 0kb
-	if fileRef.Type == fileref.FILE && fileRef.ChunkSize <= 0 {
-		if req.statusCallback != nil {
-			req.statusCallback.Error(req.allocationID, remotePathCallback, OpDownload, errors.New("", "File ChunkSize value is not permitted"))
 		}
 		return
 	}
@@ -256,17 +220,14 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 	req.encryptedKey = fileRef.EncryptedKey
 	req.chunkSize = int(fileRef.ChunkSize)
 	logger.Logger.Info("Encrypted key from fileref", req.encryptedKey)
-	// Calculate number of bytes per shard.
-	perShard := (size + int64(req.datashards) - 1) / int64(req.datashards)
-	chunkSizeWithHeader := int64(fileRef.ChunkSize)
+
+	perShard := int64(math.Ceil(float64(size) / float64(req.datashards)))
+	effectiveChunkSize := int64(fileRef.ChunkSize)
 	if len(fileRef.EncryptedKey) > 0 {
-		chunkSizeWithHeader -= EncryptedDataPaddingSize
-		chunkSizeWithHeader -= EncryptionHeaderSize
+		effectiveChunkSize -= (EncryptedDataPaddingSize + EncryptionHeaderSize)
 	}
-	chunksPerShard := (perShard + chunkSizeWithHeader - 1) / chunkSizeWithHeader
-	if len(fileRef.EncryptedKey) > 0 {
-		perShard += chunksPerShard * (EncryptedDataPaddingSize + EncryptionHeaderSize)
-	}
+
+	chunksPerShard := int64(math.Ceil(float64(perShard) / float64(effectiveChunkSize)))
 
 	wrFile, err := sys.Files.OpenFile(req.localpath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -294,7 +255,6 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 		return
 	}
 
-	logger.Logger.Info("Download Size:", size, " Shard:", perShard, " chunks/shard:", chunksPerShard)
 	logger.Logger.Info("Start block: ", req.startBlock+1, " End block: ", req.endBlock, " Num blocks: ", req.numBlocks)
 
 	downloaded := int(0)
@@ -304,6 +264,13 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 	startBlock := req.startBlock
 	endBlock := req.endBlock
 	numBlocks := req.numBlocks
+	wantSize := (endBlock - startBlock) * effectiveChunkSize
+	if endBlock >= chunksPerShard {
+		fragmentSize := int64(req.chunkSize) * int64(req.datashards)
+		resultantFileSize := fragmentSize * int64(chunksPerShard)
+		padding := resultantFileSize - size
+		wantSize -= padding
+	}
 
 	for startBlock < endBlock {
 		cnt := startBlock
@@ -329,7 +296,7 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 			return
 		}
 
-		n := int64(math.Min(float64(size), float64(len(data))))
+		n := int64(math.Min(float64(wantSize), float64(len(data))))
 		_, err = mW.Write(data[:n])
 
 		if err != nil {
@@ -340,7 +307,7 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 			return
 		}
 		downloaded = downloaded + int(n)
-		size = size - n
+		wantSize = wantSize - n
 
 		if req.statusCallback != nil {
 			req.statusCallback.InProgress(req.allocationID, remotePathCallback, OpDownload, downloaded, data)
@@ -382,4 +349,44 @@ func (req *DownloadRequest) processDownload(ctx context.Context) {
 	if req.statusCallback != nil {
 		req.statusCallback.Completed(req.allocationID, remotePathCallback, fileRef.Name, mimetype, int(fileRef.ActualFileSize), OpDownload)
 	}
+}
+
+func decryptForOwner(result *downloadBlock, encScheme encryption.EncryptionScheme, blockNum int) ([]byte, error) {
+	headerBytes := result.BlockChunks[blockNum][:EncryptionHeaderSize]
+	headerBytes = bytes.Trim(headerBytes, "\x00")
+
+	if len(headerBytes) != EncryptionHeaderSize {
+		return nil, errors.New("invalid_block_header", "")
+	}
+
+	encMsg := &encryption.EncryptedMessage{}
+	encMsg.EncryptedData = result.BlockChunks[blockNum][EncryptionHeaderSize:]
+
+	encMsg.MessageChecksum, encMsg.OverallChecksum = string(headerBytes[:128]), string(headerBytes[128:])
+	encMsg.EncryptedKey = encScheme.GetEncryptedKey()
+	decrypted, err := encScheme.Decrypt(encMsg)
+	if err != nil {
+		return nil, errors.New("decryption_error", err.Error())
+	}
+	return decrypted, nil
+}
+
+func decryptForAuthTicket(result *downloadBlock, encScheme encryption.EncryptionScheme, blockNum int) ([]byte, error) {
+	suite := edwards25519.NewBlakeSHA256Ed25519()
+	reEncMessage := &encryption.ReEncryptedMessage{
+		D1: suite.Point(),
+		D4: suite.Point(),
+		D5: suite.Point(),
+	}
+	err := reEncMessage.Unmarshal(result.BlockChunks[blockNum])
+	if err != nil {
+		return nil, errors.New("unmarshal_error", err.Error())
+	}
+
+	decrypted, err := encScheme.ReDecrypt(reEncMessage)
+	if err != nil {
+		return nil, errors.New("redecryption_error", err.Error())
+	}
+
+	return decrypted, nil
 }
