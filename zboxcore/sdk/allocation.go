@@ -1004,7 +1004,7 @@ func (a *Allocation) RevokeShare(path string, refereeClientID string) error {
 					return err
 				}
 				if resp.StatusCode != http.StatusOK {
-					l.Logger.Error(url, " Revoke share error response: ", resp.StatusCode, string(respbody))
+					l.Logger.Error(baseUrl, " Revoke share error response: ", resp.StatusCode, string(respbody))
 					return fmt.Errorf(string(respbody))
 				}
 				data := map[string]interface{}{}

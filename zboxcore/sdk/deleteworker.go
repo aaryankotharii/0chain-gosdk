@@ -112,7 +112,6 @@ func (req *DeleteRequest) ProcessDelete() error {
 			}
 
 			l.Logger.Error(err.Error())
-
 		}(i)
 	}
 	req.wg.Wait()
